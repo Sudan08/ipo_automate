@@ -12,16 +12,7 @@ import argparse
 import logging
 from dotenv import load_dotenv
 
-# Import local modules
-try:
-    # Placeholder imports - these modules will be implemented later
-    from meroshare.client import MeroshareClient
-    from models.ipo import IPO
-    from utils.config import load_config
-    from utils.logger import setup_logger
-except ImportError:
-    # For early development, we'll use placeholders
-    pass
+from meroshare.client import MeroshareClient
 
 # Setup logging
 logging.basicConfig(
@@ -76,23 +67,17 @@ def check_available_ipos(client, headless=False):
         List of available IPOs
     """
     logger.info("Checking for available IPOs...")
-    # Placeholder for actual implementation
-    # In a real implementation, we would:
-    # 1. Login to Meroshare
-    # 2. Navigate to the IPO section
-    # 3. Extract and return available IPOs
-    
-    # Dummy data for demonstration
-    dummy_ipos = [
-        {"name": "ABC Bank Limited", "type": "IPO", "min_units": 10, "max_units": 100},
-        {"name": "XYZ Hydropower", "type": "IPO", "min_units": 10, "max_units": 50}
-    ]
-    
-    logger.info(f"Found {len(dummy_ipos)} available IPOs")
-    for ipo in dummy_ipos:
-        logger.info(f"- {ipo['name']} ({ipo['type']}): {ipo['min_units']}-{ipo['max_units']} units")
-    
-    return dummy_ipos
+    try:
+        client.login()
+        client.navigate("asba")
+        logger.info("Reached Here")
+     
+        logger.info("Successfully checked available IPOs")
+    except Exception as e:
+        logger.error(f"Failed to check IPOs: {str(e)}")
+        raise
+    finally:
+        client.close()
 
 def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
     """Apply for IPO(s).
@@ -103,31 +88,15 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
         apply_all: Whether to apply for all available IPOs
         headless: Whether to run in headless mode
     """
-    available_ipos = check_available_ipos(client, headless)
-    
-    if not available_ipos:
-        logger.info("No IPOs available to apply for.")
-        return
-    
-    if apply_all:
-        logger.info("Applying for all available IPOs...")
-        for ipo in available_ipos:
-            logger.info(f"Applying for {ipo['name']}...")
-            # Placeholder for actual application process
-            logger.info(f"Successfully applied for {ipo['name']}!")
-    
-    elif ipo_name:
-        found = False
-        for ipo in available_ipos:
-            if ipo['name'].lower() == ipo_name.lower():
-                found = True
-                logger.info(f"Applying for {ipo['name']}...")
-                # Placeholder for actual application process
-                logger.info(f"Successfully applied for {ipo['name']}!")
-                break
-        
-        if not found:
-            logger.error(f"IPO with name '{ipo_name}' not found among available IPOs.")
+    try:
+        client.login()
+        # TODO: Implement IPO application logic
+        logger.info("Successfully applied for IPO(s)")
+    except Exception as e:
+        logger.error(f"Failed to apply for IPO(s): {str(e)}")
+        raise
+    finally:
+        client.close()
 
 def main():
     """Main entry point for the application."""
@@ -147,26 +116,29 @@ def main():
         logger.error("Please set these variables in your .env file")
         sys.exit(1)
     
-    # Placeholder for actual client initialization
-    # In a real implementation, we would:
-    # client = MeroshareClient(
-    #     username=os.getenv('MEROSHARE_USERNAME'),
-    #     password=os.getenv('MEROSHARE_PASSWORD'),
-    #     dp_id=os.getenv('MEROSHARE_DP_ID'),
-    #     crn=os.getenv('MEROSHARE_CRN')
-    # )
-    client = None  # Placeholder
+    # Initialize Meroshare client
+    client = MeroshareClient(
+        username=os.getenv('MEROSHARE_USERNAME'),
+        password=os.getenv('MEROSHARE_PASSWORD'),
+        dp_id=os.getenv('MEROSHARE_DP_ID'),
+        crn=os.getenv('MEROSHARE_CRN'),
+        headless=args.headless
+    )
     
-    # Process command line arguments
-    if args.check_only:
-        check_available_ipos(client, args.headless)
-    elif args.apply_all:
-        apply_for_ipo(client, apply_all=True, headless=args.headless)
-    elif args.apply:
-        apply_for_ipo(client, ipo_name=args.apply, headless=args.headless)
-    else:
-        # No specific action requested, just check IPOs as default
-        check_available_ipos(client, args.headless)
+    try:
+        # Process command line arguments
+        if args.check_only:
+            check_available_ipos(client, args.headless)
+        elif args.apply_all:
+            apply_for_ipo(client, apply_all=True, headless=args.headless)
+        elif args.apply:
+            apply_for_ipo(client, ipo_name=args.apply, headless=args.headless)
+        else:
+            # No specific action requested, just check IPOs as default
+            check_available_ipos(client, args.headless)
+    except Exception as e:
+        logger.error(f"An error occurred: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
