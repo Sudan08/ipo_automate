@@ -3,6 +3,7 @@ Meroshare client implementation using Selenium for browser automation.
 """
 
 import logging
+import time
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -12,6 +13,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
+from selenium.webdriver.support.ui import Select
+
 
 logger = logging.getLogger(__name__)
 
@@ -143,17 +146,126 @@ class MeroshareClient:
                 asba_link.click()
                 logger.info("Navigated to My ASBA section")
                 
-                # Wait for the ASBA page to load
-                wait.until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "asba-container"))
-                )
+                # # Wait for the ASBA page to load
+                # wait.until(
+                #     EC.presence_of_element_located((By.CLASS_NAME, "asba-container"))
+                # )
+                # return
             else:
                 raise ValueError(f"Unknown navigation element: {element}")
                 
         except Exception as e:
             logger.error(f"Failed to navigate to {element}: {str(e)}")
             raise
+
+    def getAvailableIPOS(self):
+        if not self.driver:
+            raise Exception("Browser not initialized. Please login first.")
+        try: 
+            wait = WebDriverWait(self.driver, 10)
+            elements = wait.until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "span[tooltip='Company Name']"))
+            )
+
+            company_names = [el.text.strip() for el in elements]
+
+            logger.info("------------------------------------------")
+
+            for index, name in enumerate(company_names , start=1):
+                logger.info(f"{index}. {name}")
+
+            logger.info("------------------------------------------")
             
+
+            return elements
+
+        except Exception as e:
+            logger.error(f"Failed to get IPOS")
+            raise
+
+    def applyAvailableIPOS(self):
+        if not self.driver:
+            raise Exception("Browser not initialized. Please login first.")
+        try:
+            wait = WebDriverWait(self.driver, 10)
+
+            containers = wait.until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div.company-list"))
+            )
+
+            for container in containers:
+                try:
+                    share_type = container.find_element(By.CSS_SELECTOR, "span[tooltip='Share Type']").text.strip()
+                    share_group = container.find_element(By.CSS_SELECTOR, "span[tooltip='Share Group']").text.strip()
+
+                    if share_type == "IPO" and share_group == "Ordinary Shares":
+                    # Scroll into view (optional but useful)
+                        apply_button = container.find_element(By.CSS_SELECTOR, "button.btn-issue")
+                        self.driver.execute_script("arguments[0].scrollIntoView();", apply_button)
+
+                    # Step 1: Click "Apply"
+                        apply_button.click()
+                        print("[INFO] Clicked Apply on first Ordinary Share IPO.")
+
+                    # === Step 2: Wait for next modal/page to appear ===
+                      
+                        self.fillApplyForm()
+
+                    # Optional Step 4: Fill additional form fields if needed
+                    # e.g., input amount or select options
+
+                    # Exit after first
+                        break
+
+                except Exception as inner_e:
+                    print(f"[WARN] Error in one container, skipping: {inner_e}")
+        
+        except Exception as e:
+            logger.error(f"Failed to get IPOS")
+            raise
+
+    def fillApplyForm(self):
+        if not self.driver:
+            raise Exception("Browser not initialized. Please login first.")
+        
+        try:
+            # Initialize with longer wait time
+            wait = WebDriverWait(self.driver, 15)
+            
+            # Retry mechanism
+        
+                    # 1. Wait for dropdown to be ready (Angular-specific wait)
+            select_element = wait.until(
+                lambda d: d.find_element(By.ID, "selectBank")
+            )
+            
+            # 2. Click to open dropdown (may be needed for Angular)
+            select_element.click()
+            time.sleep(1)  # Brief pause for dropdown animation
+            
+            # 3. Find the option (using more robust XPath)
+            option = wait.until(
+                EC.presence_of_element_located(
+                    (By.XPATH, "//select[@id='selectBank']/option[@value='37']")
+                )
+            )
+
+            option.click()
+
+            logger.info("===============================")
+                    
+                    
+           
+                    
+        except Exception as e:
+            logger.error(f"Critical failure in bank selection: {e}")
+            self.recover_browser()  # Implement browser recovery
+            raise
+
+
+
+
+       
     def close(self):
         """Close the browser and clean up resources."""
         if self.driver:

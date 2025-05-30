@@ -24,45 +24,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description='Automate Meroshare IPO application processes'
     )
-    
+
     parser.add_argument(
         '--check-only',
         action='store_true',
         help='Only check available IPOs without applying'
     )
-    
+
     parser.add_argument(
         '--apply-all',
         action='store_true',
         help='Apply for all available IPOs'
     )
-    
+
     parser.add_argument(
         '--apply',
         type=str,
         help='Apply for a specific IPO by name'
     )
-    
+
     parser.add_argument(
         '--headless',
         action='store_true',
         help='Run browser in headless mode'
     )
-    
+
     return parser.parse_args()
+
 
 def check_available_ipos(client, headless=False):
     """Check for available IPOs.
-    
+
     Args:
         client: An authenticated MeroshareClient instance
         headless: Whether to run in headless mode
-        
+
     Returns:
         List of available IPOs
     """
@@ -70,18 +72,19 @@ def check_available_ipos(client, headless=False):
     try:
         client.login()
         client.navigate("asba")
-        logger.info("Reached Here")
-     
         logger.info("Successfully checked available IPOs")
+        client.getAvailableIPOS()
+        
     except Exception as e:
         logger.error(f"Failed to check IPOs: {str(e)}")
         raise
     finally:
         client.close()
 
+
 def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
     """Apply for IPO(s).
-    
+
     Args:
         client: An authenticated MeroshareClient instance
         ipo_name: Name of specific IPO to apply for
@@ -90,6 +93,11 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
     """
     try:
         client.login()
+        client.navigate("asba")
+        logger.info("Successfully checked available IPOs")
+        client.getAvailableIPOS()
+        client.applyAvailableIPOS()
+
         # TODO: Implement IPO application logic
         logger.info("Successfully applied for IPO(s)")
     except Exception as e:
@@ -98,24 +106,26 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
     finally:
         client.close()
 
+
 def main():
     """Main entry point for the application."""
     # Load environment variables from .env file
     load_dotenv()
-    
+
     # Parse command line arguments
     args = parse_arguments()
-    
+
     # Check for required environment variables
-    required_vars = ['MEROSHARE_USERNAME', 'MEROSHARE_PASSWORD', 
+    required_vars = ['MEROSHARE_USERNAME', 'MEROSHARE_PASSWORD',
                      'MEROSHARE_DP_ID', 'MEROSHARE_CRN']
-    
+
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
-        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        logger.error(
+            f"Missing required environment variables: {', '.join(missing_vars)}")
         logger.error("Please set these variables in your .env file")
         sys.exit(1)
-    
+
     # Initialize Meroshare client
     client = MeroshareClient(
         username=os.getenv('MEROSHARE_USERNAME'),
@@ -124,7 +134,7 @@ def main():
         crn=os.getenv('MEROSHARE_CRN'),
         headless=args.headless
     )
-    
+
     try:
         # Process command line arguments
         if args.check_only:
@@ -140,6 +150,7 @@ def main():
         logger.error(f"An error occurred: {str(e)}")
         sys.exit(1)
 
+
 if __name__ == "__main__":
     try:
         main()
@@ -149,4 +160,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.exception(f"An error occurred: {e}")
         sys.exit(1)
-
