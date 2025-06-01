@@ -74,7 +74,7 @@ def check_available_ipos(client, headless=False):
         client.navigate("asba")
         logger.info("Successfully checked available IPOs")
         client.getAvailableIPOS()
-        
+
     except Exception as e:
         logger.error(f"Failed to check IPOs: {str(e)}")
         raise
@@ -132,6 +132,7 @@ def main():
         password=os.getenv('MEROSHARE_PASSWORD'),
         dp_id=os.getenv('MEROSHARE_DP_ID'),
         crn=os.getenv('MEROSHARE_CRN'),
+        transaction_pin=os.getenv("MEROSHARE_TRANSACTIONPIN"),
         headless=args.headless
     )
 
