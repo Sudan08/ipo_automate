@@ -13,6 +13,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
+import tempfile
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class MeroshareClient:
     def _setup_driver(self):
         """Set up the Chrome WebDriver with appropriate options."""
         chrome_options = Options()
+        temp_dir = tempfile.mkdtemp()
         if self.headless:
             chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
@@ -49,6 +51,7 @@ class MeroshareClient:
         chrome_options.add_argument('--remote-debugging-port=9222')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
+        chrome_options.add_argument(f'--user-data-dir={temp_dir}')
 
         # Use ChromeDriverManager with Chrome browser
         driver_path = ChromeDriverManager(
@@ -203,7 +206,6 @@ class MeroshareClient:
                 EC.presence_of_all_elements_located(
                     (By.CSS_SELECTOR, "div.company-list"))
             )
-
             for container in containers:
                 try:
                     share_type = container.find_element(
@@ -214,7 +216,8 @@ class MeroshareClient:
                     if share_type == "IPO" and share_group == "Ordinary Shares":
                         # Scroll into view (optional but useful)
                         apply_button = container.find_element(
-                            By.CSS_SELECTOR, "button.btn-issue:has(i:contains('Apply'))")
+                            By.XPATH, ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]")
+
                         self.driver.execute_script(
                             "arguments[0].scrollIntoView();", apply_button)
 

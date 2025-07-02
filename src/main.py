@@ -58,7 +58,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def check_available_ipos(client, headless=False):
+def check_available_ipos(client, headless=True):
     """Check for available IPOs.
 
     Args:
@@ -133,7 +133,7 @@ def main():
         dp_id=os.getenv('MEROSHARE_DP_ID'),
         crn=os.getenv('MEROSHARE_CRN'),
         transaction_pin=os.getenv("MEROSHARE_TRANSACTIONPIN"),
-        headless=args.headless
+        headless=False
     )
 
     try:
