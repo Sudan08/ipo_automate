@@ -82,7 +82,7 @@ def check_available_ipos(client, headless=True):
         client.close()
 
 
-def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
+def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
     """Apply for IPO(s).
 
     Args:
@@ -94,7 +94,6 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=False):
     try:
         client.login()
         client.navigate("asba")
-        logger.info("Successfully checked available IPOs")
         client.getAvailableIPOS()
         client.applyAvailableIPOS()
 
@@ -133,7 +132,7 @@ def main():
         dp_id=os.getenv('MEROSHARE_DP_ID'),
         crn=os.getenv('MEROSHARE_CRN'),
         transaction_pin=os.getenv("MEROSHARE_TRANSACTIONPIN"),
-        headless=False
+        headless=True
     )
 
     try:

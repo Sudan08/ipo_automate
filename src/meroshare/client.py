@@ -15,6 +15,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 import tempfile
 
+from selenium.common.exceptions import ElementClickInterceptedException
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class MeroshareClient:
     """Client for interacting with Meroshare platform using Selenium."""
 
-    def __init__(self, username, password, dp_id, crn, transaction_pin,  headless=False):
+    def __init__(self, username, password, dp_id, crn, transaction_pin,  headless=True):
         """Initialize the Meroshare client.
 
         Args:
@@ -149,14 +150,21 @@ class MeroshareClient:
 
         try:
             wait = WebDriverWait(self.driver, 10)
-
             if element.lower() == 'asba':
                 # Wait for and click the My ASBA link
                 asba_link = wait.until(
                     EC.element_to_be_clickable(
                         (By.XPATH, "//a[@href='#/asba']"))
                 )
-                asba_link.click()
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", asba_link)
+                time.sleep(0.3)
+                try:
+                    asba_link.click()
+                except ElementClickInterceptedException:
+                    logger.info("Click intercepted, using JavaScript click instead")
+                    self.driver.execute_script("arguments[0].click();", asba_link)
+
+                
                 logger.info("Navigated to My ASBA section")
 
                 # # Wait for the ASBA page to load
@@ -174,31 +182,51 @@ class MeroshareClient:
     def getAvailableIPOS(self):
         if not self.driver:
             raise Exception("Browser not initialized. Please login first.")
+
         try:
             wait = WebDriverWait(self.driver, 10)
-            elements = wait.until(
+
+            # Wait for all IPO containers
+            containers = wait.until(
                 EC.presence_of_all_elements_located(
-                    (By.CSS_SELECTOR, "span[tooltip='Company Name']"))
+                    (By.CSS_SELECTOR, "div.company-list")
+                )
             )
 
-            company_names = [el.text.strip() for el in elements]
+            filtered_containers = []
+            company_names = []
+
+            for container in containers:
+                try:
+                    share_type = container.find_element(By.CSS_SELECTOR, "span[tooltip='Share Type']").text.strip()
+                    share_group = container.find_element(By.CSS_SELECTOR, "span[tooltip='Share Group']").text.strip()
+
+                    if share_type == "IPO" and share_group == "Ordinary Shares":
+                        # Get company name for this container
+                        company_name = container.find_element(By.CSS_SELECTOR, "span[tooltip='Company Name']").text.strip()
+
+                        filtered_containers.append(container)
+                        company_names.append(company_name)
+
+                except Exception as e:
+                    logger.warning(f"Error reading container info, skipping: {e}")
 
             logger.info("------------------------------------------")
-
             for index, name in enumerate(company_names, start=1):
                 logger.info(f"{index}. {name}")
-
             logger.info("------------------------------------------")
 
-            return elements
+            # Return the filtered containers for further processing (like clicking Apply)
+            return filtered_containers
 
         except Exception as e:
-            logger.error(f"Failed to get IPOS {e}")
+            logger.error(f"Failed to get IPOs: {e}")
             raise
 
     def applyAvailableIPOS(self):
         if not self.driver:
             raise Exception("Browser not initialized. Please login first.")
+    
         try:
             wait = WebDriverWait(self.driver, 10)
 
@@ -206,6 +234,7 @@ class MeroshareClient:
                 EC.presence_of_all_elements_located(
                     (By.CSS_SELECTOR, "div.company-list"))
             )
+
             for container in containers:
                 try:
                     share_type = container.find_element(
@@ -214,34 +243,49 @@ class MeroshareClient:
                         By.CSS_SELECTOR, "span[tooltip='Share Group']").text.strip()
 
                     if share_type == "IPO" and share_group == "Ordinary Shares":
-                        # Scroll into view (optional but useful)
-                        apply_button = container.find_element(
-                            By.XPATH, ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]")
+                        try:
+                            # Try to locate the Apply button inside the container
+                            apply_button = container.find_element(
+                                By.XPATH, ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]"
+                            )
 
-                        self.driver.execute_script(
-                            "arguments[0].scrollIntoView();", apply_button)
+                            print(not apply_button.is_displayed() or not apply_button.is_enabled())
 
-                    # Step 1: Click "Apply"
-                        apply_button.click()
-                        print("[INFO] Clicked Apply on first Ordinary Share IPO.")
+                            # Optional: Check visibility and if it's enabled
+                            if not apply_button.is_displayed() or not apply_button.is_enabled():
+                                logger.info("Already Applied, skipping this IPO.")
+                                continue
 
-                    # === Step 2: Wait for next modal/page to appear ===
+                            # Scroll into view
+                            self.driver.execute_script("arguments[0].scrollIntoView();", apply_button)
 
-                        self.fillApplyForm()
+                            # Wait until it's clickable
+                            WebDriverWait(self.driver, 10).until(
+                                EC.element_to_be_clickable((
+                                    By.XPATH,
+                                    ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]"
+                                ))
+                            )
 
-                    # Optional Step 4: Fill additional form fields if needed
-                    # e.g., input amount or select options
+                            # Click the Apply button
+                            apply_button.click()
+                            print("[INFO] Clicked Apply on first Ordinary Share IPO.")
 
-                    # Exit after first
-                        break
+                            # Proceed to form filling
+                            self.fillApplyForm()
+
+                            break  # Exit after applying to first IPO
+
+                        except Exception:
+                            logger.info("Seems like already Applied")
+                            continue  # Go to next IPO container
 
                 except Exception as inner_e:
-                    print(
-                        f"[WARN] Error in one container, skipping: {inner_e}")
+                    print(f"[WARN] Error in one container, skipping: {inner_e}")
 
         except Exception as e:
-            logger.error(f"Failed to get IPOS")
-            raise
+            logger.error(f"Testing this exception : {e}")
+            raise Exception(f"Testing this exception : {e}")
 
     def fillApplyForm(self):
         if not self.driver:
