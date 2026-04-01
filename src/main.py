@@ -17,10 +17,8 @@ from meroshare.client import MeroshareClient
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
@@ -28,31 +26,23 @@ logger = logging.getLogger(__name__)
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='Automate Meroshare IPO application processes'
+        description="Automate Meroshare IPO application processes"
     )
 
     parser.add_argument(
-        '--check-only',
-        action='store_true',
-        help='Only check available IPOs without applying'
+        "--check-only",
+        action="store_true",
+        help="Only check available IPOs without applying",
     )
 
     parser.add_argument(
-        '--apply-all',
-        action='store_true',
-        help='Apply for all available IPOs'
+        "--apply-all", action="store_true", help="Apply for all available IPOs"
     )
 
-    parser.add_argument(
-        '--apply',
-        type=str,
-        help='Apply for a specific IPO by name'
-    )
+    parser.add_argument("--apply", type=str, help="Apply for a specific IPO by name")
 
     parser.add_argument(
-        '--headless',
-        action='store_true',
-        help='Run browser in headless mode'
+        "--headless", action="store_true", help="Run browser in headless mode"
     )
 
     return parser.parse_args()
@@ -72,8 +62,11 @@ def check_available_ipos(client, headless=True):
     try:
         client.login()
         client.navigate("asba")
-        logger.info("Successfully checked available IPOs")
-        client.getAvailableIPOS()
+        ipos = client.getAvailableIPOS()
+        if not ipos:
+            logger.info("No IPOs are currently available.")
+        else:
+            logger.info("Successfully checked available IPOs")
 
     except Exception as e:
         logger.error(f"Failed to check IPOs: {str(e)}")
@@ -94,10 +87,11 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
     try:
         client.login()
         client.navigate("asba")
-        client.getAvailableIPOS()
+        ipos = client.getAvailableIPOS()
+        if not ipos:
+            logger.info("No IPOs are currently available. Nothing to apply for.")
+            sys.exit(2)
         client.applyAvailableIPOS()
-
-        # TODO: Implement IPO application logic
         logger.info("Successfully applied for IPO(s)")
     except Exception as e:
         logger.error(f"Failed to apply for IPO(s): {str(e)}")
@@ -115,24 +109,29 @@ def main():
     args = parse_arguments()
 
     # Check for required environment variables
-    required_vars = ['MEROSHARE_USERNAME', 'MEROSHARE_PASSWORD',
-                     'MEROSHARE_DP_ID', 'MEROSHARE_CRN']
+    required_vars = [
+        "MEROSHARE_USERNAME",
+        "MEROSHARE_PASSWORD",
+        "MEROSHARE_DP_ID",
+        "MEROSHARE_CRN",
+    ]
 
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
         logger.error(
-            f"Missing required environment variables: {', '.join(missing_vars)}")
+            f"Missing required environment variables: {', '.join(missing_vars)}"
+        )
         logger.error("Please set these variables in your .env file")
         sys.exit(1)
 
     # Initialize Meroshare client
     client = MeroshareClient(
-        username=os.getenv('MEROSHARE_USERNAME'),
-        password=os.getenv('MEROSHARE_PASSWORD'),
-        dp_id=os.getenv('MEROSHARE_DP_ID'),
-        crn=os.getenv('MEROSHARE_CRN'),
+        username=os.getenv("MEROSHARE_USERNAME"),
+        password=os.getenv("MEROSHARE_PASSWORD"),
+        dp_id=os.getenv("MEROSHARE_DP_ID"),
+        crn=os.getenv("MEROSHARE_CRN"),
         transaction_pin=os.getenv("MEROSHARE_TRANSACTIONPIN"),
-        headless=True
+        headless=True,
     )
 
     try:
