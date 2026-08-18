@@ -65,4 +65,18 @@ class TestArgumentParsing:
             assert args.apply_all is False
             assert args.apply is None
             assert args.headless is False
+            assert args.account is None
+            assert args.accounts_file is None
+
+    def test_account_flag(self):
+        """Test the --account flag is correctly parsed."""
+        with patch('sys.argv', ['main.py', '--account', 'primary']):
+            args = parse_arguments()
+            assert args.account == 'primary'
+
+    def test_accounts_file_flag(self):
+        """Test the --accounts-file flag is correctly parsed."""
+        with patch('sys.argv', ['main.py', '--accounts-file', '/tmp/custom.json']):
+            args = parse_arguments()
+            assert args.accounts_file == '/tmp/custom.json'
 

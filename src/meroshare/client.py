@@ -5,14 +5,11 @@ Meroshare client implementation using Selenium for browser automation.
 import logging
 import time
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
 import tempfile
 
 from selenium.common.exceptions import ElementClickInterceptedException, NoSuchElementException
@@ -23,7 +20,16 @@ logger = logging.getLogger(__name__)
 class MeroshareClient:
     """Client for interacting with Meroshare platform using Selenium."""
 
-    def __init__(self, username, password, dp_id, crn, transaction_pin, headless=True):
+    def __init__(
+        self,
+        username,
+        password,
+        dp_id,
+        crn,
+        transaction_pin,
+        headless=True,
+        account_name=None,
+    ):
         """Initialize the Meroshare client.
 
         Args:
@@ -32,6 +38,8 @@ class MeroshareClient:
             dp_id (str): DP ID number
             crn (str): Customer Reference Number
             headless (bool): Whether to run browser in headless mode
+            account_name (str): Optional label used to prefix log lines when
+                running multiple accounts, for easier log reading.
         """
         self.username = username
         self.password = password
@@ -39,7 +47,11 @@ class MeroshareClient:
         self.crn = crn
         self.transaction_pin = transaction_pin
         self.headless = headless
+        self.account_name = account_name
         self.driver = None
+
+    def _log_prefix(self):
+        return f"[{self.account_name}] " if self.account_name else ""
 
     def _setup_driver(self):
         """Set up the Chrome WebDriver with appropriate options."""
@@ -54,10 +66,7 @@ class MeroshareClient:
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument(f"--user-data-dir={temp_dir}")
 
-        # Use ChromeDriverManager with Chrome browser
-        driver_path = ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()
-        service = Service(driver_path)
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        self.driver = webdriver.Chrome(options=chrome_options)
         self.driver.maximize_window()
 
     def login(self):
@@ -130,10 +139,10 @@ class MeroshareClient:
                     (By.CSS_SELECTOR, "i.msi.msi-logout.header-menu__icon")
                 )
             )
-            logger.info("Successfully logged in to Meroshare")
+            logger.info(f"{self._log_prefix()}Successfully logged in to Meroshare")
 
         except Exception as e:
-            logger.error(f"Failed to login: {str(e)}")
+            logger.error(f"{self._log_prefix()}Failed to login: {str(e)}")
             if self.driver:
                 self.driver.save_screenshot("login_error.png")
                 logger.info("Saved screenshot of error state to login_error.png")
@@ -191,7 +200,7 @@ class MeroshareClient:
             containers = self.driver.find_elements(By.CSS_SELECTOR, "div.company-list")
 
             if len(containers) == 0:
-                logger.info("No IPOs are currently available.")
+                logger.info(f"{self._log_prefix()}No IPOs are currently available.")
                 return []
 
             filtered_containers = []
@@ -231,7 +240,7 @@ class MeroshareClient:
             return filtered_containers
 
         except Exception as e:
-            logger.error(f"Failed to get IPOs: {e}")
+            logger.error(f"{self._log_prefix()}Failed to get IPOs: {e}")
             raise
 
     def applyAvailableIPOS(self):
@@ -243,7 +252,7 @@ class MeroshareClient:
             containers = self.driver.find_elements(By.CSS_SELECTOR, "div.company-list")
 
             if len(containers) == 0:
-                logger.info("No IPOs are currently available.")
+                logger.info(f"{self._log_prefix()}No IPOs are currently available.")
                 return
 
             for container in containers:
@@ -308,8 +317,8 @@ class MeroshareClient:
                     print(f"[WARN] Error in one container, skipping: {inner_e}")
 
         except Exception as e:
-            logger.error(f"Testing this exception : {e}")
-            raise Exception(f"Testing this exception : {e}")
+            logger.error(f"{self._log_prefix()}Failed to apply for IPO(s): {e}")
+            raise Exception(f"Failed to apply for IPO(s): {e}")
 
     def fillApplyForm(self):
         if not self.driver:
@@ -407,3 +416,4 @@ class MeroshareClient:
         if self.driver:
             self.driver.quit()
             self.driver = None
+            logger.info(f"{self._log_prefix()}Closed browser session")

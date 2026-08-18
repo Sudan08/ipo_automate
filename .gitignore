@@ -95,6 +95,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Meroshare account credentials (plaintext usernames/passwords/PINs)
+src/accounts.json
+
 # Spyder project settings
 .spyderproject
 .spyproject

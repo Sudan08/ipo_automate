@@ -3,16 +3,20 @@
 Automate Meroshare IPO - Main Entry Point
 
 This script provides functionality to automate the process of applying for IPOs
-through the Meroshare platform in Nepal.
+through the Meroshare platform in Nepal, across one or more configured accounts.
 """
 
-import os
 import sys
 import argparse
 import logging
-from dotenv import load_dotenv
 
 from meroshare.client import MeroshareClient
+from models.account import (
+    AccountConfigError,
+    DEFAULT_ACCOUNTS_PATH,
+    get_account_by_name,
+    load_accounts,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -45,6 +49,21 @@ def parse_arguments():
         "--headless", action="store_true", help="Run browser in headless mode"
     )
 
+    parser.add_argument(
+        "--account",
+        type=str,
+        default=None,
+        help="Limit the run to a single named account from accounts.json "
+        "(default: run all accounts)",
+    )
+
+    parser.add_argument(
+        "--accounts-file",
+        type=str,
+        default=None,
+        help="Path to accounts.json (default: src/accounts.json)",
+    )
+
     return parser.parse_args()
 
 
@@ -56,7 +75,7 @@ def check_available_ipos(client, headless=True):
         headless: Whether to run in headless mode
 
     Returns:
-        List of available IPOs
+        bool: True if the check succeeded, False otherwise
     """
     logger.info("Checking for available IPOs...")
     try:
@@ -67,10 +86,11 @@ def check_available_ipos(client, headless=True):
             logger.info("No IPOs are currently available.")
         else:
             logger.info("Successfully checked available IPOs")
+        return True
 
     except Exception as e:
         logger.error(f"Failed to check IPOs: {str(e)}")
-        raise
+        return False
     finally:
         client.close()
 
@@ -83,6 +103,9 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
         ipo_name: Name of specific IPO to apply for
         apply_all: Whether to apply for all available IPOs
         headless: Whether to run in headless mode
+
+    Returns:
+        str: One of "applied", "no_ipos", "failed"
     """
     try:
         client.login()
@@ -90,64 +113,80 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
         ipos = client.getAvailableIPOS()
         if not ipos:
             logger.info("No IPOs are currently available. Nothing to apply for.")
-            sys.exit(2)
+            return "no_ipos"
         client.applyAvailableIPOS()
         logger.info("Successfully applied for IPO(s)")
+        return "applied"
     except Exception as e:
         logger.error(f"Failed to apply for IPO(s): {str(e)}")
-        raise
+        return "failed"
     finally:
         client.close()
 
 
+def _print_summary(results):
+    """Log a summary table of the outcome for each processed account."""
+    logger.info("===== Run Summary =====")
+    for name, outcome in results.items():
+        logger.info(f"{name:<20}: {outcome}")
+    logger.info("========================")
+
+
 def main():
     """Main entry point for the application."""
-    # Load environment variables from .env file
-    load_dotenv()
-
-    # Parse command line arguments
     args = parse_arguments()
 
-    # Check for required environment variables
-    required_vars = [
-        "MEROSHARE_USERNAME",
-        "MEROSHARE_PASSWORD",
-        "MEROSHARE_DP_ID",
-        "MEROSHARE_CRN",
-    ]
-
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    if missing_vars:
-        logger.error(
-            f"Missing required environment variables: {', '.join(missing_vars)}"
-        )
-        logger.error("Please set these variables in your .env file")
-        sys.exit(1)
-
-    # Initialize Meroshare client
-    client = MeroshareClient(
-        username=os.getenv("MEROSHARE_USERNAME"),
-        password=os.getenv("MEROSHARE_PASSWORD"),
-        dp_id=os.getenv("MEROSHARE_DP_ID"),
-        crn=os.getenv("MEROSHARE_CRN"),
-        transaction_pin=os.getenv("MEROSHARE_TRANSACTIONPIN"),
-        headless=True,
-    )
-
+    accounts_path = args.accounts_file or DEFAULT_ACCOUNTS_PATH
     try:
-        # Process command line arguments
-        if args.check_only:
-            check_available_ipos(client, args.headless)
-        elif args.apply_all:
-            apply_for_ipo(client, apply_all=True, headless=args.headless)
-        elif args.apply:
-            apply_for_ipo(client, ipo_name=args.apply, headless=args.headless)
-        else:
-            # No specific action requested, just check IPOs as default
-            check_available_ipos(client, args.headless)
-    except Exception as e:
-        logger.error(f"An error occurred: {str(e)}")
+        accounts = load_accounts(accounts_path)
+    except AccountConfigError as e:
+        logger.error(str(e))
         sys.exit(1)
+
+    if args.account:
+        selected = get_account_by_name(accounts, args.account)
+        if selected is None:
+            logger.error(f"No account named '{args.account}' found in {accounts_path}")
+            sys.exit(1)
+        accounts = [selected]
+
+    results = {}
+
+    for account in accounts:
+        logger.info(f"=== Processing account: {account.name} ({account.username}) ===")
+        client = MeroshareClient(
+            username=account.username,
+            password=account.password,
+            dp_id=account.dp_id,
+            crn=account.crn,
+            transaction_pin=account.transaction_pin,
+            headless=args.headless,
+            account_name=account.name,
+        )
+        try:
+            if args.check_only:
+                ok = check_available_ipos(client, args.headless)
+                results[account.name] = "ok" if ok else "failed"
+            elif args.apply_all:
+                results[account.name] = apply_for_ipo(
+                    client, apply_all=True, headless=args.headless
+                )
+            elif args.apply:
+                results[account.name] = apply_for_ipo(
+                    client, ipo_name=args.apply, headless=args.headless
+                )
+            else:
+                ok = check_available_ipos(client, args.headless)
+                results[account.name] = "ok" if ok else "failed"
+        except Exception as e:
+            logger.error(f"Unexpected error processing account '{account.name}': {e}")
+            results[account.name] = "failed"
+
+    _print_summary(results)
+
+    if any(v == "failed" for v in results.values()):
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,10 @@
+[
+  {
+    "name": "example-account-1",
+    "username": "00000000",
+    "password": "REPLACE_ME",
+    "dp_id": "0000",
+    "crn": "0000000000000000",
+    "transaction_pin": "0000"
+  }
+]
