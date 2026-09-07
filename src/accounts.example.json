@@ -5,6 +5,9 @@
     "password": "REPLACE_ME",
     "dp_id": "0000",
     "crn": "0000000000000000",
-    "transaction_pin": "0000"
+    "transaction_pin": "0000",
+    "bank": "Optional - bank name, only needed if several are linked",
+    "bank_account": "Optional - account number, only needed if several exist",
+    "applied_kitta": "10"
   }
 ]

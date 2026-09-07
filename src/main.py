@@ -50,6 +50,22 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fill the application form but stop before submitting, and save a "
+        "screenshot of it - use this to verify the bank/account selection",
+    )
+
+    parser.add_argument(
+        "--pace",
+        type=float,
+        default=1.0,
+        help="Multiplier on the human-like pause between each step (default: 1.0). "
+        "Raise it to slow the run down further, or pass 0 to remove the pauses "
+        "entirely - fast, but the run looks like a script",
+    )
+
+    parser.add_argument(
         "--account",
         type=str,
         default=None,
@@ -95,7 +111,7 @@ def check_available_ipos(client, headless=True):
         client.close()
 
 
-def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
+def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True, dry_run=False):
     """Apply for IPO(s).
 
     Args:
@@ -105,7 +121,7 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
         headless: Whether to run in headless mode
 
     Returns:
-        str: One of "applied", "no_ipos", "failed"
+        str: One of "applied", "already_applied", "no_ipos", "failed"
     """
     try:
         client.login()
@@ -114,8 +130,14 @@ def apply_for_ipo(client, ipo_name=None, apply_all=False, headless=True):
         if not ipos:
             logger.info("No IPOs are currently available. Nothing to apply for.")
             return "no_ipos"
-        client.applyAvailableIPOS()
-        logger.info("Successfully applied for IPO(s)")
+        applied = client.applyAvailableIPOS()
+        if not applied:
+            logger.info("No new IPOs to apply for (all already applied).")
+            return "already_applied"
+        if dry_run:
+            logger.info(f"Dry run: filled the form for {applied} IPO(s), nothing submitted")
+            return "dry_run"
+        logger.info(f"Successfully applied for {applied} IPO(s)")
         return "applied"
     except Exception as e:
         logger.error(f"Failed to apply for IPO(s): {str(e)}")
@@ -162,6 +184,11 @@ def main():
             transaction_pin=account.transaction_pin,
             headless=args.headless,
             account_name=account.name,
+            dry_run=args.dry_run,
+            bank=account.bank,
+            bank_account=account.bank_account,
+            applied_kitta=account.applied_kitta,
+            pace=args.pace,
         )
         try:
             if args.check_only:
@@ -169,11 +196,14 @@ def main():
                 results[account.name] = "ok" if ok else "failed"
             elif args.apply_all:
                 results[account.name] = apply_for_ipo(
-                    client, apply_all=True, headless=args.headless
+                    client, apply_all=True, headless=args.headless, dry_run=args.dry_run
                 )
             elif args.apply:
                 results[account.name] = apply_for_ipo(
-                    client, ipo_name=args.apply, headless=args.headless
+                    client,
+                    ipo_name=args.apply,
+                    headless=args.headless,
+                    dry_run=args.dry_run,
                 )
             else:
                 ok = check_available_ipos(client, args.headless)

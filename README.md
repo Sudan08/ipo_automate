@@ -66,6 +66,14 @@ configured via a single JSON file.
    | `crn`              | Customer Reference Number                               |
    | `transaction_pin`  | Transaction PIN                                         |
 
+   These extra fields are optional — leave them out unless you need them:
+
+   | Field           | Description                                                        |
+   | --------------- | ------------------------------------------------------------------ |
+   | `bank`          | Bank to apply through, by name (e.g. `"Global IME"`). Only needed if several banks are linked to the demat account; otherwise the linked one is used. |
+   | `bank_account`  | Account number to apply with. Only needed if the chosen bank has more than one. |
+   | `applied_kitta` | Units to apply for (default `"10"`)                                 |
+
 3. Restrict file permissions so only you can read it:
 
    ```bash
@@ -118,6 +126,11 @@ python src/main.py
 --apply-all             Apply for all available IPOs
 --apply NAME            Apply for a specific IPO by name
 --headless              Run browser in headless mode
+--dry-run               Fill in the application form but stop before submitting,
+                        saving a screenshot of it (apply_form_dryrun_NAME.png)
+--pace N                Multiplier on the pause between each step (default: 1.0).
+                        Raise it to move more slowly, or pass 0 to remove the
+                        pauses entirely
 --account NAME          Limit the run to a single named account from accounts.json
                         (default: run every account in the file)
 --accounts-file PATH    Use a non-default accounts.json path
@@ -126,6 +139,12 @@ python src/main.py
 Every action (`--check-only`, `--apply-all`, `--apply`) runs once per account in
 `accounts.json`, in order, and a run summary is printed at the end. One account
 failing doesn't stop the others from being processed.
+
+The run is deliberately paced: each step waits a randomised beat and each field is
+typed a character at a time, so the session looks like someone using the site
+rather than a script filling a form in one burst. A full application therefore
+takes a minute or so per account. `--pace 0` removes the pauses if you need speed
+and accept looking automated; `--pace 2` slows everything to twice the delay.
 
 ### Example Commands
 
@@ -141,6 +160,9 @@ python src/main.py --account primary --check-only
 
 # Apply for one specific IPO, across every configured account
 python src/main.py --apply "ABC Bank Limited" --headless
+
+# Check the form fills in correctly without actually submitting an application
+python src/main.py --account primary --apply-all --dry-run
 ```
 
 ## Project Structure

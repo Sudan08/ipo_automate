@@ -17,6 +17,12 @@ DEFAULT_ACCOUNTS_PATH = os.path.join(
 
 _REQUIRED_FIELDS = ("name", "username", "password", "dp_id", "crn", "transaction_pin")
 
+# Optional per-account settings, with the default used when they are absent.
+# `bank` / `bank_account` are only needed when more than one is linked to the
+# account - MeroShare assigns their internal ids per user, so they are matched
+# by name at runtime rather than configured as ids.
+_OPTIONAL_FIELDS = {"bank": "", "bank_account": "", "applied_kitta": "10"}
+
 
 class AccountConfigError(Exception):
     """Raised when accounts.json is missing, malformed, or invalid."""
@@ -30,6 +36,9 @@ class Account:
     dp_id: str
     crn: str
     transaction_pin: str
+    bank: str = ""
+    bank_account: str = ""
+    applied_kitta: str = "10"
 
 
 def load_accounts(path: str = DEFAULT_ACCOUNTS_PATH) -> List[Account]:
@@ -74,7 +83,11 @@ def load_accounts(path: str = DEFAULT_ACCOUNTS_PATH) -> List[Account]:
                 f"Duplicate account name '{entry['name']}' in {path}. Names must be unique."
             )
         seen_names.add(entry["name"])
-        accounts.append(Account(**{f: str(entry[f]) for f in _REQUIRED_FIELDS}))
+        fields = {f: str(entry[f]) for f in _REQUIRED_FIELDS}
+        for field, default in _OPTIONAL_FIELDS.items():
+            value = entry.get(field)
+            fields[field] = str(value) if value not in (None, "") else default
+        accounts.append(Account(**fields))
 
     return accounts
 

@@ -3,22 +3,39 @@ Meroshare client implementation using Selenium for browser automation.
 """
 
 import logging
+import random
 import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 import tempfile
 
-from selenium.common.exceptions import ElementClickInterceptedException, NoSuchElementException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class MeroshareClient:
     """Client for interacting with Meroshare platform using Selenium."""
+
+    # How often the Angular-populated dropdowns are re-read while waiting for
+    # them to load and settle.
+    POLL_INTERVAL = 0.5
+
+    # A person reads a field, moves the mouse, and types - none of which happens
+    # instantly. Filling the whole form in a few hundred milliseconds is the most
+    # obvious tell that a script is driving the page, so every step is separated
+    # by a randomised pause and every value is typed a character at a time. The
+    # ranges below are seconds, scaled by `self.pace`.
+    STEP_PAUSE = (0.8, 2.0)
+    KEYSTROKE_PAUSE = (0.05, 0.18)
 
     def __init__(
         self,
@@ -29,6 +46,11 @@ class MeroshareClient:
         transaction_pin,
         headless=True,
         account_name=None,
+        bank=None,
+        bank_account=None,
+        applied_kitta="10",
+        dry_run=False,
+        pace=1.0,
     ):
         """Initialize the Meroshare client.
 
@@ -40,6 +62,20 @@ class MeroshareClient:
             headless (bool): Whether to run browser in headless mode
             account_name (str): Optional label used to prefix log lines when
                 running multiple accounts, for easier log reading.
+            bank (str): Optional bank to apply through, matched against the
+                bank dropdown by name (substring, case-insensitive) or by the
+                option's value. Defaults to the only/first bank linked to the
+                account.
+            bank_account (str): Optional account number to apply with, matched
+                the same way. Defaults to the only/first account of the bank.
+            applied_kitta (str): Number of units to apply for. Defaults to 10.
+            dry_run (bool): Fill the application form but stop before submitting
+                it, so the bank/account selection can be verified without
+                committing a real application.
+            pace (float): Multiplier on every human-like pause between steps.
+                1.0 is the normal pace, 2.0 is twice as slow and deliberate,
+                0 removes the pauses entirely (fast, but the run looks like a
+                script to MeroShare).
         """
         self.username = username
         self.password = password
@@ -48,6 +84,11 @@ class MeroshareClient:
         self.transaction_pin = transaction_pin
         self.headless = headless
         self.account_name = account_name
+        self.bank = bank
+        self.bank_account = bank_account
+        self.applied_kitta = str(applied_kitta or "10")
+        self.dry_run = dry_run
+        self.pace = max(0.0, float(pace))
         self.driver = None
 
     def _log_prefix(self):
@@ -96,6 +137,7 @@ class MeroshareClient:
                     (By.CLASS_NAME, "select2-selection__rendered")
                 )
             )
+            self._pause("opening the DP dropdown")
             dp_dropdown.click()
             logger.info("Clicked on DP dropdown")
 
@@ -103,8 +145,8 @@ class MeroshareClient:
             search_input = wait.until(
                 EC.presence_of_element_located((By.CLASS_NAME, "select2-search__field"))
             )
-            search_input.clear()
-            search_input.send_keys(self.dp_id)
+            self._type(search_input, self.dp_id, "DP ID")
+            self._pause("confirming the DP")
             search_input.send_keys(Keys.ENTER)
             logger.info(f"Selected DP ID: {self.dp_id}")
 
@@ -112,16 +154,16 @@ class MeroshareClient:
             username_field = wait.until(
                 EC.presence_of_element_located((By.NAME, "username"))
             )
-            username_field.clear()
-            username_field.send_keys(self.username)
+            self._pause("the username field")
+            self._type(username_field, self.username, "username")
             logger.info("Entered username")
 
             # Enter password
             password_field = wait.until(
                 EC.presence_of_element_located((By.NAME, "password"))
             )
-            password_field.clear()
-            password_field.send_keys(self.password)
+            self._pause("the password field")
+            self._type(password_field, self.password, "password")
             logger.info("Entered password")
 
             # Click login button
@@ -130,6 +172,7 @@ class MeroshareClient:
                     (By.XPATH, "//button[contains(text(), 'Login')]")
                 )
             )
+            self._pause("submitting the login form")
             login_button.click()
             logger.info("Clicked login button")
 
@@ -168,7 +211,7 @@ class MeroshareClient:
                 self.driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", asba_link
                 )
-                time.sleep(0.3)
+                self._pause("opening My ASBA")
                 try:
                     asba_link.click()
                 except ElementClickInterceptedException:
@@ -244,172 +287,431 @@ class MeroshareClient:
             raise
 
     def applyAvailableIPOS(self):
+        """Apply for every open Ordinary Share IPO that has not been applied for.
+
+        Returns:
+            int: how many IPOs an application was submitted for.
+        """
         if not self.driver:
             raise Exception("Browser not initialized. Please login first.")
 
-        try:
-            # Use find_elements so an empty page returns [] instead of raising TimeoutException
-            containers = self.driver.find_elements(By.CSS_SELECTOR, "div.company-list")
+        applied_count = 0
 
-            if len(containers) == 0:
-                logger.info(f"{self._log_prefix()}No IPOs are currently available.")
+        # Use find_elements so an empty page returns [] instead of raising TimeoutException
+        containers = self.driver.find_elements(By.CSS_SELECTOR, "div.company-list")
+
+        if len(containers) == 0:
+            logger.info(f"{self._log_prefix()}No IPOs are currently available.")
+            return 0
+
+        for container in containers:
+            try:
+                share_type = container.find_element(
+                    By.CSS_SELECTOR, "span[tooltip='Share Type']"
+                ).text.strip()
+                share_group = container.find_element(
+                    By.CSS_SELECTOR, "span[tooltip='Share Group']"
+                ).text.strip()
+                company_name = container.find_element(
+                    By.CSS_SELECTOR, "span[tooltip='Company Name']"
+                ).text.strip()
+            except NoSuchElementException:
+                logger.warning(
+                    f"{self._log_prefix()}Could not read a company row, skipping it."
+                )
+                continue
+
+            if share_type != "IPO" or share_group != "Ordinary Shares":
+                continue
+
+            # A missing / disabled Apply button is the normal "already applied"
+            # case; only that is treated as skippable. Anything that goes wrong
+            # afterwards is a real failure and must propagate.
+            try:
+                apply_button = container.find_element(
+                    By.XPATH,
+                    ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]",
+                )
+            except NoSuchElementException:
+                logger.info(
+                    f"{self._log_prefix()}{company_name}: no Apply button "
+                    f"(already applied), skipping."
+                )
+                continue
+
+            if not apply_button.is_displayed() or not apply_button.is_enabled():
+                logger.info(
+                    f"{self._log_prefix()}{company_name}: Apply button disabled "
+                    f"(already applied), skipping."
+                )
+                continue
+
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});", apply_button
+            )
+            self._wait(10).until(EC.element_to_be_clickable(apply_button))
+            self._pause(f"clicking Apply for {company_name}")
+            try:
+                apply_button.click()
+            except ElementClickInterceptedException:
+                self.driver.execute_script("arguments[0].click();", apply_button)
+            logger.info(f"{self._log_prefix()}Clicked Apply for {company_name}")
+
+            self.fillApplyForm()
+            applied_count += 1
+            logger.info(f"{self._log_prefix()}Submitted application for {company_name}")
+            break  # Exit after applying to the first open IPO
+
+        return applied_count
+
+    def _pause(self, what=None, bounds=None):
+        """Sleep for a randomised, human-length beat between two steps.
+
+        Randomised rather than fixed: a constant delay is just as machine-like as
+        no delay at all, only slower.
+        """
+        if not self.pace:
+            return
+        low, high = bounds or self.STEP_PAUSE
+        delay = random.uniform(low, high) * self.pace
+        if what:
+            logger.debug(f"{self._log_prefix()}Pausing {delay:.1f}s before {what}")
+        time.sleep(delay)
+
+    def _type(self, element, text, what=None):
+        """Type into a field the way a person does - one key at a time.
+
+        `send_keys(whole_string)` lands the entire value in a single input event,
+        which no keyboard can produce.
+        """
+        element.clear()
+        if not self.pace:
+            element.send_keys(text)
+            return
+        for character in str(text):
+            element.send_keys(character)
+            time.sleep(random.uniform(*self.KEYSTROKE_PAUSE) * self.pace)
+        if what:
+            logger.debug(f"{self._log_prefix()}Typed {what}")
+
+    def _wait(self, timeout=15):
+        """A WebDriverWait that tolerates Angular re-rendering elements mid-poll."""
+        return WebDriverWait(
+            self.driver,
+            timeout,
+            ignored_exceptions=(
+                NoSuchElementException,
+                StaleElementReferenceException,
+            ),
+        )
+
+    @staticmethod
+    def _real_options(select):
+        """Return only the options of a <select> that are genuine choices.
+
+        MeroShare's dropdowns are Angular-bound and start out holding just a
+        placeholder row - "Select Bank", or the "? undefined:undefined ?" option
+        Angular inserts while the ngModel is unset - so those must be filtered
+        out before deciding whether the data has actually arrived.
+        """
+        real = []
+        for option in select.options:
+            value = (option.get_attribute("value") or "").strip()
+            text = (option.text or "").strip()
+            if not value or value.startswith("?") or value.lower() in ("null", "undefined"):
+                continue
+            if text.lower().startswith("select "):
+                continue
+            real.append(option)
+        return real
+
+    def _option_signature(self, options):
+        """A comparable fingerprint of a dropdown's current real options."""
+        return [
+            (
+                (o.get_attribute("value") or "").strip(),
+                (o.text or "").strip(),
+            )
+            for o in options
+        ]
+
+    def _wait_for_options(self, element_id, description, timeout=30):
+        """Wait until an Angular-populated <select> has finished loading.
+
+        MeroShare fetches the bank list, and then each bank's accounts, over the
+        network. A dropdown therefore goes through empty -> partially populated /
+        still holding the previous bank's rows -> final. Reading it the moment it
+        is merely non-empty can pick up rows that Angular then replaces, which
+        leaves the form holding an account the server rejects - the application
+        never gets recorded even though every click "succeeded".
+
+        Requiring the option list to come back identical on two consecutive polls
+        means the fetch that produced it has settled, and requiring the element to
+        be enabled means Angular is no longer blocking it while loading.
+
+        Returns:
+            tuple: (Select, list of real options) once the list is stable.
+        """
+        deadline = time.time() + timeout
+        previous = None
+        while time.time() < deadline:
+            try:
+                element = self.driver.find_element(By.ID, element_id)
+                if not element.is_enabled():
+                    previous = None
+                    time.sleep(self.POLL_INTERVAL)
+                    continue
+                select = Select(element)
+                options = self._real_options(select)
+                signature = self._option_signature(options)
+            except (NoSuchElementException, StaleElementReferenceException):
+                previous = None
+                time.sleep(self.POLL_INTERVAL)
+                continue
+
+            if signature and signature == previous:
+                return select, options
+
+            previous = signature
+            time.sleep(self.POLL_INTERVAL)
+
+        raise RuntimeError(
+            f"{description} dropdown (#{element_id}) never finished loading its "
+            f"options within {timeout}s."
+        )
+
+    def _verify_selection(self, element_id, description, expected_value, timeout=10):
+        """Confirm the browser really is holding the option we asked for.
+
+        Angular can reset a <select> right after it is set - when the change it
+        listens for triggers another reload of the same list - so a select call
+        that returned cleanly is not proof the value stuck. Checking the selected
+        option afterwards is what turns a silent no-op into a loud failure.
+        """
+        deadline = time.time() + timeout
+        current = None
+        while time.time() < deadline:
+            try:
+                select = Select(self.driver.find_element(By.ID, element_id))
+                current = (
+                    select.first_selected_option.get_attribute("value") or ""
+                ).strip()
+            except (NoSuchElementException, StaleElementReferenceException):
+                current = None
+            if current == expected_value:
                 return
+            time.sleep(self.POLL_INTERVAL)
 
-            for container in containers:
-                try:
-                    share_type = container.find_element(
-                        By.CSS_SELECTOR, "span[tooltip='Share Type']"
-                    ).text.strip()
-                    share_group = container.find_element(
-                        By.CSS_SELECTOR, "span[tooltip='Share Group']"
-                    ).text.strip()
+        raise RuntimeError(
+            f"{description} would not stay selected: asked for "
+            f"'{expected_value}', the form is holding '{current}'."
+        )
 
-                    if share_type == "IPO" and share_group == "Ordinary Shares":
-                        try:
-                            # Try to locate the Apply button inside the container
-                            apply_button = container.find_element(
-                                By.XPATH,
-                                ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]",
-                            )
+    def _select_dropdown_option(self, element_id, description, preferred=None):
+        """Pick an option from an Angular-populated <select> by name, not by a
+        hardcoded option value.
 
-                            print(
-                                not apply_button.is_displayed()
-                                or not apply_button.is_enabled()
-                            )
+        Bank ids and bank-account ids are per-account and assigned by MeroShare,
+        so they cannot be hardcoded or derived from the CRN. The options are read
+        from the page instead: `preferred` is matched against each option's
+        visible text (case-insensitive substring) or its exact value, and when no
+        preference is configured the single available option is used.
 
-                            # Optional: Check visibility and if it's enabled
-                            if (
-                                not apply_button.is_displayed()
-                                or not apply_button.is_enabled()
-                            ):
-                                logger.info("Already Applied, skipping this IPO.")
-                                continue
+        Args:
+            element_id (str): id of the <select> element.
+            description (str): human name used in logs and error messages.
+            preferred (str): optional bank / account name or option value.
 
-                            # Scroll into view
-                            self.driver.execute_script(
-                                "arguments[0].scrollIntoView();", apply_button
-                            )
+        Returns:
+            str: the visible text of the option that was selected.
+        """
+        self._wait().until(EC.presence_of_element_located((By.ID, element_id)))
+        select, options = self._wait_for_options(element_id, description)
 
-                            # Wait until it's clickable
-                            WebDriverWait(self.driver, 10).until(
-                                EC.element_to_be_clickable(
-                                    (
-                                        By.XPATH,
-                                        ".//button[contains(@class, 'btn-issue') and .//i[contains(text(), 'Apply')]]",
-                                    )
-                                )
-                            )
+        available = [
+            f"{o.get_attribute('value')}={(o.text or '').strip()}" for o in options
+        ]
+        logger.info(
+            f"{self._log_prefix()}Available {description}(s): {', '.join(available)}"
+        )
 
-                            # Click the Apply button
-                            apply_button.click()
-                            print("[INFO] Clicked Apply on first Ordinary Share IPO.")
+        chosen = None
+        if preferred:
+            needle = str(preferred).strip().lower()
+            for option in options:
+                value = (option.get_attribute("value") or "").strip().lower()
+                text = (option.text or "").strip().lower()
+                if needle == value or needle in text:
+                    chosen = option
+                    break
+            if chosen is None:
+                raise RuntimeError(
+                    f"No {description} matching '{preferred}'. "
+                    f"Available: {', '.join(available)}"
+                )
+        else:
+            chosen = options[0]
+            if len(options) > 1:
+                logger.warning(
+                    f"{self._log_prefix()}{len(options)} {description}s linked to this "
+                    f"account and none configured; using the first one. Set it "
+                    f"explicitly in accounts.json to choose."
+                )
 
-                            # Proceed to form filling
-                            self.fillApplyForm()
+        chosen_text = (chosen.text or "").strip()
+        chosen_value = (chosen.get_attribute("value") or "").strip()
+        self._pause(f"picking the {description}")
+        select.select_by_value(chosen_value)
+        self._verify_selection(element_id, description, chosen_value)
+        logger.info(f"{self._log_prefix()}Selected {description}: {chosen_text}")
+        return chosen_text
 
-                            break  # Exit after applying to first IPO
+    def _confirm_submission(self, timeout=45):
+        """Wait for MeroShare to actually acknowledge the application.
 
-                        except Exception:
-                            logger.info("Seems like already Applied")
-                            continue  # Go to next IPO container
+        Clicking Apply only starts a request; the browser used to be torn down in
+        the caller's `finally` immediately afterwards, so a rejected - or still
+        in-flight - application was reported as a success. The PIN dialog closing
+        is what marks the request as done, and the toast carries the verdict.
+        """
+        deadline = time.time() + timeout
+        message = None
+        while time.time() < deadline:
+            message = self._read_toast()
+            if message:
+                break
+            if not self._pin_dialog_open():
+                break
+            time.sleep(self.POLL_INTERVAL)
 
-                except Exception as inner_e:
-                    print(f"[WARN] Error in one container, skipping: {inner_e}")
+        if message:
+            lowered = message.lower()
+            if any(
+                word in lowered
+                for word in ("error", "fail", "invalid", "incorrect", "cannot")
+            ):
+                raise RuntimeError(f"MeroShare rejected the application: {message}")
+            logger.info(f"{self._log_prefix()}MeroShare responded: {message}")
+            return
 
-        except Exception as e:
-            logger.error(f"{self._log_prefix()}Failed to apply for IPO(s): {e}")
-            raise Exception(f"Failed to apply for IPO(s): {e}")
+        if self._pin_dialog_open():
+            raise RuntimeError(
+                "The transaction PIN dialog is still open after Apply - the "
+                "application was not submitted."
+            )
+
+        logger.info(
+            f"{self._log_prefix()}Application submitted (dialog closed, no message "
+            f"shown)."
+        )
+
+    def _read_toast(self):
+        """Text of any toast/alert MeroShare is currently showing, if any."""
+        selectors = (
+            "div.toast-message",
+            "div.toast-title",
+            "div[class*='toast']",
+            "div.alert",
+        )
+        for selector in selectors:
+            try:
+                for element in self.driver.find_elements(By.CSS_SELECTOR, selector):
+                    if element.is_displayed():
+                        text = (element.text or "").strip()
+                        if text:
+                            return text
+            except StaleElementReferenceException:
+                continue
+        return None
+
+    def _pin_dialog_open(self):
+        """Whether the transaction PIN dialog is still on screen."""
+        try:
+            return any(
+                element.is_displayed()
+                for element in self.driver.find_elements(By.ID, "transactionPIN")
+            )
+        except StaleElementReferenceException:
+            return True
 
     def fillApplyForm(self):
+        """Fill and submit the IPO application form for the open share."""
         if not self.driver:
             raise Exception("Browser not initialized. Please login first.")
 
         try:
-            # Initialize with longer wait time
-            wait = WebDriverWait(self.driver, 15)
+            wait = self._wait(15)
 
-            # Retry mechanism
+            self._select_dropdown_option("selectBank", "bank", self.bank)
 
-            # 1. Wait for dropdown to be ready (Angular-specific wait)
-            select_element = wait.until(lambda d: d.find_element(By.ID, "selectBank"))
-
-            # 2. Click to open dropdown (may be needed for Angular)
-            select_element.click()
-            time.sleep(1)  # Brief pause for dropdown animation
-
-            # 3. Find the option (using more robust XPath)
-            option = wait.until(
-                EC.presence_of_element_located(
-                    (By.XPATH, "//select[@id='selectBank']/option[@value='37']")
-                )
+            # Picking a bank starts a fetch for that bank's accounts, so the
+            # account dropdown is waited on until that fetch settles rather than
+            # slept on for a fixed second.
+            self._select_dropdown_option(
+                "accountNumber", "bank account", self.bank_account
             )
-
-            option.click()
-
-            time.sleep(1)
-
-            account_number = wait.until(
-                EC.presence_of_element_located((By.ID, "accountNumber"))
-            )
-
-            account_number.click()
-
-            account_number_option = wait.until(
-                EC.presence_of_element_located(
-                    (
-                        By.XPATH,
-                        f"//select[@id='accountNumber']/option[@value={self.crn}]",
-                    )
-                )
-            )
-
-            account_number_option.click()
 
             applied_kitta = wait.until(
-                EC.presence_of_element_located((By.ID, "appliedKitta"))
+                EC.element_to_be_clickable((By.ID, "appliedKitta"))
             )
-            applied_kitta.clear()
-            applied_kitta.send_keys("10")
+            self._pause("the applied kitta field")
+            self._type(applied_kitta, self.applied_kitta, "applied kitta")
 
-            crnNumber = wait.until(EC.presence_of_element_located((By.ID, "crnNumber")))
+            crnNumber = wait.until(EC.element_to_be_clickable((By.ID, "crnNumber")))
+            self._pause("the CRN field")
+            self._type(crnNumber, self.crn, "CRN")
 
-            crnNumber.clear()
-
-            crnNumber.send_keys(self.crn)
-
-            disclaimer = wait.until(
-                EC.presence_of_element_located((By.ID, "disclaimer"))
-            )
-
+            disclaimer = wait.until(EC.element_to_be_clickable((By.ID, "disclaimer")))
+            self._pause("ticking the disclaimer")
             disclaimer.click()
 
+            if self.dry_run:
+                logger.info(
+                    f"{self._log_prefix()}Dry run: form filled, stopping before submit."
+                )
+                self._save_debug_screenshot("apply_form_dryrun")
+                return
+
             button_locator = wait.until(
-                EC.presence_of_element_located(
+                EC.element_to_be_clickable(
                     (By.CSS_SELECTOR, "button.btn.btn-gap.btn-primary[type='submit']")
                 )
             )
-
+            self._pause("submitting the form")
             button_locator.click()
 
             transaction_pin_container = wait.until(
-                EC.presence_of_element_located((By.ID, "transactionPIN"))
+                EC.element_to_be_clickable((By.ID, "transactionPIN"))
             )
-
-            transaction_pin_container.clear()
-
-            transaction_pin_container.send_keys(self.transaction_pin)
+            self._pause("the transaction PIN field")
+            self._type(transaction_pin_container, self.transaction_pin, "transaction PIN")
 
             pin_submit = wait.until(
-                EC.presence_of_element_located(
+                EC.element_to_be_clickable(
                     (By.XPATH, "//button[span[text()='Apply ']]")
                 )
             )
-
+            self._pause("confirming the application")
             pin_submit.click()
 
+            self._confirm_submission()
+
         except Exception as e:
-            logger.error(f"Critical failure in bank selection: {e}")
+            logger.error(f"{self._log_prefix()}Failed to fill the application form: {e}")
+            self._save_debug_screenshot("apply_form_error")
             raise
+
+    def _save_debug_screenshot(self, prefix):
+        """Best-effort screenshot of the current page, for diagnosing failures."""
+        if not self.driver:
+            return
+        suffix = f"_{self.account_name}" if self.account_name else ""
+        path = f"{prefix}{suffix}.png"
+        try:
+            self.driver.save_screenshot(path)
+            logger.info(f"{self._log_prefix()}Saved screenshot of error state to {path}")
+        except Exception as e:
+            logger.warning(f"{self._log_prefix()}Could not save screenshot: {e}")
 
     def close(self):
         """Close the browser and clean up resources."""
